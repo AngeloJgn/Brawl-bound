@@ -285,4 +285,11 @@ server.listen(SETTINGS.PORT, () => {
     console.log(`\n--- BRAWL-BOUND: WILD EDITION 2026 ---`);
     console.log(`🚀 NEURAL_LINK_ACTIVE: PORT ${SETTINGS.PORT}`);
     console.log(`--------------------------------------\n`);
+    
+    
+});
+
+// --- EL CAMBIO CLAVE PARA RENDER ---
+server.listen(SETTINGS.PORT, '0.0.0.0', () => {
+    console.log(`🚀 Brawl-bound live on port ${SETTINGS.PORT}`);
 });
