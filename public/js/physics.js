@@ -1,42 +1,10 @@
 /**
- * PHYSICS.JS - MOTOR DE FÍSICA AUTORITARIO
- * Optimizado para evitar desincronización de terreno y saltos de posición.
+ * PHYSICS.JS - MOTOR DE FÍSICA AUTORITARIO (OPEN TUNE 2026)
+ * Sistema de proyectiles parabólicos, colisiones de bitmask y daño por caída.
  */
 
 window.animacionActiva = false;
 const canvasMundo = document.getElementById('mundo');
-
-// --- UTILIDADES DE COORDENADAS ---
-function obtenerCoordenadasJuego(e) {
-    const rect = canvasMundo.getBoundingClientRect();
-    return {
-        x: (e.clientX - rect.left) * (MUNDO.w / rect.width),
-        y: (e.clientY - rect.top) * (MUNDO.h / rect.height)
-    };
-}
-
-// --- SISTEMA DE DISPARO ---
-canvasMundo.addEventListener('mousedown', (e) => {
-    if (typeof ultimoEstadoTurno === 'undefined' || !window.misJugadores) return;
-    if (socket.id !== ultimoEstadoTurno || window.animacionActiva || window.enFaseEscape) return;
-
-    const j = window.misJugadores[socket.id];
-    if (!j || j.hp <= 0) return;
-
-    const coords = obtenerCoordenadasJuego(e);
-    const startX = j.x + 17;
-    const startY = j.y - 15;
-
-    const dx = coords.x - startX;
-    const dy = coords.y - startY;
-    
-    const anguloRad = Math.atan2(dy, dx);
-    const potencia = Math.min(Math.sqrt(dx*dx + dy*dy) / 2, 100);
-
-    if (potencia > 5 && typeof enviarDisparo === "function") {
-        enviarDisparo(anguloRad, potencia);
-    }
-});
 
 // --- MOTOR DE PROYECTILES ---
 function iniciarAnimacionProyectil(datos) {
@@ -45,6 +13,7 @@ function iniciarAnimacionProyectil(datos) {
     let distanciaRecorrida = 0;
     let trail = []; 
 
+    // v0 basado en la potencia escalada por la constante del mundo
     const v0 = datos.potencia * MUNDO.vFuerza; 
     const rad = datos.angulo;
 
@@ -58,32 +27,33 @@ function iniciarAnimacionProyectil(datos) {
     function frame() {
         if (!window.animacionActiva) return;
 
-        // Movimiento de física
+        // Integración de Euler para la física del proyectil
         const dx_paso = vx * MUNDO.dt;
         const dy_paso = vy * MUNDO.dt;
         distanciaRecorrida += Math.sqrt(dx_paso**2 + dy_paso**2);
 
         posX += dx_paso;
-        vy += MUNDO.g * MUNDO.dt;
+        vy += MUNDO.g * MUNDO.dt; // Gravedad aplicada al eje Y
         posY += vy * MUNDO.dt;
 
+        // Estela del proyectil
         trail.push({x: posX, y: posY});
-        if (trail.length > 12) trail.shift();
+        if (trail.length > 15) trail.shift();
 
-        // RENDERIZADO DEL PROYECTIL
+        // Inyectamos el dibujo en el renderer global
         window.dibujarProyectilesGlobal = (ctx) => {
             ctx.save();
             if (trail.length > 2) {
                 ctx.beginPath();
                 ctx.strokeStyle = colorTrail;
                 ctx.lineWidth = 3;
-                ctx.globalAlpha = 0.5;
+                ctx.globalAlpha = 0.4;
                 ctx.moveTo(trail[0].x, trail[0].y);
                 for(let p of trail) ctx.lineTo(p.x, p.y);
                 ctx.stroke();
             }
             ctx.fillStyle = "#fff";
-            ctx.shadowBlur = 10;
+            ctx.shadowBlur = 15;
             ctx.shadowColor = colorTrail;
             ctx.beginPath();
             ctx.arc(posX, posY, 4, 0, Math.PI * 2);
@@ -94,13 +64,14 @@ function iniciarAnimacionProyectil(datos) {
         const victimaId = verificarColisionJugadores(posX, posY);
         const tocaTerreno = verificarSuelo(posX, posY);
 
-        if (victimaId || tocaTerreno || posY > MUNDO.h + 100 || posX < -50 || posX > MUNDO.w + 50) {
+        // Verificación de límites y colisiones
+        if (victimaId || tocaTerreno || posY > MUNDO.h + 100 || posX < -100 || posX > MUNDO.w + 100) {
             window.animacionActiva = false;
             window.dibujarProyectilesGlobal = null; 
             
             if ((tocaTerreno || victimaId) && !impactoRegistrado) {
                 impactoRegistrado = true; 
-                datos.distanciaRecorrida = distanciaRecorrida; // Corrección de nombre
+                datos.distanciaRecorrida = distanciaRecorrida;
                 datos.velYImpacto = vy; 
                 ejecutarExplosion(posX, posY, victimaId, datos);
             } else if (socket.id === ultimoEstadoTurno) {
@@ -113,41 +84,43 @@ function iniciarAnimacionProyectil(datos) {
     requestAnimationFrame(frame);
 }
 
-// --- EXPLOSIONES ---
+// --- SISTEMA DE EXPLOSIONES Y CRÁTERES ---
 function ejecutarExplosion(x, y, victimaId, datos) {
-    const radioCrater = datos.arma === 'especial' ? 45 : 30;
-    let danoFinal = datos.arma === 'especial' ? 45 : 25; 
+    const radioCrater = datos.arma === 'especial' ? 50 : 35;
+    let danoBase = datos.arma === 'especial' ? 45 : 25; 
 
     if (victimaId && window.misJugadores[victimaId]) {
         const victima = window.misJugadores[victimaId];
         let multiplicador = 1.0;
-        let etiquetas = [];
+        let etiqueta = "";
 
-        if (datos.distanciaRecorrida > 400) {
-            multiplicador += 0.3;
-            etiquetas.push("LONG SHOT");
+        // Bonus por distancia (Skillshot)
+        if (datos.distanciaRecorrida > 500) {
+            multiplicador += 0.4;
+            etiqueta = "LONG SHOT!";
         }
-        if (datos.velYImpacto > 5) {
-            multiplicador += 0.2;
-            etiquetas.push("TOP HIT");
+        // Bonus por impacto vertical (Top Down)
+        else if (datos.velYImpacto > 6) {
+            multiplicador += 0.25;
+            etiqueta = "DIRECT HIT!";
         }
 
-        danoFinal = Math.floor(danoFinal * multiplicador);
+        const danoFinal = Math.floor(danoBase * multiplicador);
         victima.hp -= danoFinal;
         if (victima.hp < 0) victima.hp = 0;
 
         if (typeof crearTextoFlotante === 'function') {
-            const msg = (etiquetas.length > 0 ? etiquetas[0] + " " : "") + `-${danoFinal}`;
-            crearTextoFlotante(victima.x + 17, victima.y - 30, msg, multiplicador > 1.2 ? "#ffff00" : "#ff3d00");
+            crearTextoFlotante(victima.x + 17, victima.y - 35, `${etiqueta} -${danoFinal}`, multiplicador > 1.2 ? "#ffeb3b" : "#ff3d00");
         }
     }
 
+    // El jugador que disparó es el encargado de avisar al servidor
     if (socket.id === ultimoEstadoTurno) {
         socket.emit('registrar_impacto', { 
             x: Math.round(x), y: Math.round(y),
             radio: radioCrater, idEnemigo: victimaId, arma: datos.arma 
         });
-        setTimeout(() => socket.emit('finalizar_animacion'), 800);
+        setTimeout(() => socket.emit('finalizar_animacion'), 600);
     }
     
     crearCrater(x, y, radioCrater);
@@ -156,8 +129,9 @@ function ejecutarExplosion(x, y, victimaId, datos) {
 function crearCrater(x, y, radio) {
     if (typeof tierraCtx === 'undefined' || !mapaColisiones) return;
 
-    if (typeof activarShake === 'function') activarShake(radio * 0.5); 
+    if (typeof activarShake === 'function') activarShake(radio * 0.6); 
     
+    // 1. Agujero visual
     tierraCtx.save();
     tierraCtx.globalCompositeOperation = 'destination-out'; 
     tierraCtx.beginPath();
@@ -165,6 +139,7 @@ function crearCrater(x, y, radio) {
     tierraCtx.fill();
     tierraCtx.restore();
 
+    // 2. Agujero en Bitmask (Lógica)
     const r2 = radio * radio;
     for (let i = -radio; i <= radio; i++) {
         for (let j = -radio; j <= radio; j++) {
@@ -177,40 +152,47 @@ function crearCrater(x, y, radio) {
             }
         }
     }
-    // IMPORTANTE: NO llamar a procesarGravedadPasiva aquí dentro si se llama desde un loop externo
 }
 
-// --- MOTOR DE GRAVEDAD PASIVA (CORREGIDO) ---
+// --- GRAVEDAD Y COLISIONES DE JUGADORES ---
 function procesarGravedadPasiva() {
+    if (typeof misJugadores === 'undefined' || window.animacionActiva) return;
+
     for (let id in misJugadores) {
         let j = misJugadores[id];
-        if (j.enSalto || j.hp <= 0 || window.animacionActiva) continue;
+        if (j.enSalto || j.hp <= 0) continue;
 
         let piesX = Math.floor(j.x + 17);
-        let sobreOtroTanque = false;
+        let sobreObjeto = false;
 
-        // 1. Detección de tanque debajo
+        // Detección de colisión Tank-on-Tank
         for (let otroId in misJugadores) {
             if (id === otroId) continue; 
             let otro = misJugadores[otroId];
             if (otro.hp <= 0) continue;
 
-            if (Math.abs(j.x - otro.x) < 26 && j.y >= otro.y - 25 && j.y <= otro.y - 10) {
-                sobreOtroTanque = true;
-                j.y = otro.y - 20; // Pegado instantáneo
+            if (Math.abs(j.x - otro.x) < 28 && j.y >= otro.y - 25 && j.y <= otro.y - 5) {
+                sobreObjeto = true;
+                j.y = otro.y - 15; // Mantener sobre el otro tanque
                 break;
             }
         }
 
-        if (sobreOtroTanque) continue; // Si está sobre un tanque, no cae más.
+        if (sobreObjeto) continue;
 
-        // 2. Gravedad de suelo
+        // Gravedad contra Bitmask
         if (!verificarSuelo(piesX, j.y)) {
-            if (j.y < MUNDO.h) j.y += 3;
+            j.y += 3.5; // Velocidad de caída constante
         } else {
-            while (verificarSuelo(piesX, j.y - 1)) j.y--;
+            // Corrección para no enterrarse
+            let iter = 0;
+            while (verificarSuelo(piesX, j.y - 1) && iter < 10) {
+                j.y--;
+                iter++;
+            }
         }
 
+        // Muerte por caída al vacío
         if (j.y > MUNDO.h) {
             j.hp = 0;
             if (id === socket.id) socket.emit('actualizar_hp', { hp: 0 });
@@ -218,9 +200,7 @@ function procesarGravedadPasiva() {
     }
 }
 
-// --- LOOP DE FÍSICA CONSTANTE ---
-// Si no tenías este loop, la gravedad solo se ejecutaba al disparar. 
-// Esto asegura que te quedes arriba siempre.
+// Ejecución constante de la física ambiental
 setInterval(procesarGravedadPasiva, 1000 / 60);
 
 function verificarColisionJugadores(x, y) {
@@ -228,92 +208,84 @@ function verificarColisionJugadores(x, y) {
         if (id === ultimoEstadoTurno && !window.enFaseEscape) continue; 
         let j = misJugadores[id];
         if (j.hp <= 0) continue; 
-        if (Math.hypot(x - (j.x + 17), y - (j.y - 8)) < 22) return id; 
+        // Radio de colisión circular del tanque
+        if (Math.hypot(x - (j.x + 17), y - (j.y - 7)) < 22) return id; 
     }
     return null;
 }
 
-// --- SISTEMA DE SALTO ---
+// --- SISTEMA DE SALTO Y STOMP ---
 if (typeof socket !== 'undefined') {
     socket.on('jugador_salto', (id) => {
         const j = misJugadores[id];
         if (!j || j.enSalto) return; 
 
         j.enSalto = true;
-        let velY = -7.5; 
-        const gravedadSalto = 0.35;
+        let velY = -8.0; 
+        const gravedadSalto = 0.38;
 
-    function frameSalto() {
-    velY += gravedadSalto;
-    j.y += velY;
-    let piesX = Math.floor(j.x + 17);
-    
-    let enemigoDebajo = null;
-    let idVictima = null; // <--- Variable para guardar la ID y usarla fuera del for
+        function frameSalto() {
+            velY += gravedadSalto;
+            j.y += velY;
+            let piesX = Math.floor(j.x + 17);
+            
+            let idVictima = null;
+            let enemigoDebajo = null;
 
-    // 1. DETECCIÓN DE ENEMIGO
-    for (let idEnemigo in misJugadores) {
-        if (idEnemigo === id) continue; 
-        let otroJugador = misJugadores[idEnemigo];
-        if (otroJugador.hp <= 0) continue;
-        
-        if (Math.abs(j.x - otroJugador.x) < 26 && j.y >= otroJugador.y - 25 && j.y <= otroJugador.y - 10) {
-            enemigoDebajo = otroJugador;
-            idVictima = idEnemigo; // Guardamos la ID aquí
-            break;
-        }
-    }
-
-    // 2. LÓGICA DE IMPACTO
-    if (velY > 0 && (verificarSuelo(piesX, j.y) || enemigoDebajo)) {
-        
-        if (enemigoDebajo) {
-            if (velY > 6) {
-                const dano = Math.floor(velY * 2.2);
+            // Buscar si caemos sobre alguien
+            for (let idEnemigo in misJugadores) {
+                if (idEnemigo === id) continue; 
+                let otro = misJugadores[idEnemigo];
+                if (otro.hp <= 0) continue;
                 
-                enemigoDebajo.hp -= dano;
-                if (enemigoDebajo.hp < 0) enemigoDebajo.hp = 0;
-
-                crearTextoFlotante(enemigoDebajo.x + 17, enemigoDebajo.y - 20, `STOMP! -${dano}`, "#ff00ff");
-                if (typeof activarShake === 'function') activarShake(12);
-
-                // Ahora idVictima sí está definida aquí fuera
-                if (id === socket.id) {
-                    socket.emit('registrar_impacto', { 
-                        idEnemigo: idVictima, 
-                        dano: dano,
-                        tipo: 'stomp' 
-                    });
+                if (Math.abs(j.x - otro.x) < 28 && j.y >= otro.y - 22 && j.y <= otro.y - 5) {
+                    enemigoDebajo = otro;
+                    idVictima = idEnemigo;
+                    break;
                 }
             }
-            j.y = enemigoDebajo.y - 20; 
-            
-        } else {
-            // Daño por caída propia al suelo
-            if (velY > 10.5) {
-                const danoCaida = Math.floor((velY - 10) * 4);
-                j.hp -= danoCaida;
-                if (j.hp < 0) j.hp = 0;
-                crearTextoFlotante(j.x + 17, j.y - 20, `CAÍDA! -${danoCaida}`, "#ff4400");
-                
-                if (id === socket.id) socket.emit('actualizar_hp', { hp: j.hp });
+
+            // Aterrizaje
+            if (velY > 0 && (verificarSuelo(piesX, j.y) || enemigoDebajo)) {
+                if (enemigoDebajo) {
+                    // Daño por STOMP (aplastar)
+                    const danoStomp = Math.floor(velY * 3);
+                    enemigoDebajo.hp -= danoStomp;
+                    if (enemigoDebajo.hp < 0) enemigoDebajo.hp = 0;
+
+                    crearTextoFlotante(enemigoDebajo.x + 17, enemigoDebajo.y - 25, `STOMP! -${danoStomp}`, "#ff00ff");
+                    if (typeof activarShake === 'function') activarShake(15);
+
+                    if (id === socket.id) {
+                        socket.emit('registrar_impacto', { 
+                            idEnemigo: idVictima, 
+                            dano: danoStomp,
+                            tipo: 'stomp' 
+                        });
+                    }
+                    j.y = enemigoDebajo.y - 15;
+                } else {
+                    // Daño por caída fuerte al suelo
+                    if (velY > 11) {
+                        const danoSelf = Math.floor((velY - 11) * 5);
+                        j.hp -= danoSelf;
+                        crearTextoFlotante(j.x + 17, j.y - 20, `CRASH! -${danoSelf}`, "#ff4400");
+                        if (id === socket.id) socket.emit('actualizar_hp', { hp: j.hp });
+                    }
+                    while (verificarSuelo(piesX, j.y - 1)) j.y--;
+                }
+
+                j.enSalto = false;
+                if (id === socket.id) socket.emit('mover', { x: j.x, y: j.y });
+                return;
             }
-            while (verificarSuelo(piesX, j.y - 1)) j.y--;
+
+            if (j.enSalto && j.y < MUNDO.h + 50) {
+                requestAnimationFrame(frameSalto);
+            } else {
+                j.enSalto = false;
+            }
         }
-
-        j.enSalto = false;
-        if (id === socket.id) socket.emit('mover', { x: j.x, y: j.y });
-        return;
-    }
-
-    if (j.y > MUNDO.h + 100) {
-        j.enSalto = false;
-        if (id === socket.id) socket.emit('actualizar_hp', { hp: 0 });
-        return;
-    }
-
-    if (j.enSalto) requestAnimationFrame(frameSalto);
-}
         requestAnimationFrame(frameSalto);
     });
 }

@@ -1,13 +1,14 @@
 /**
- * SOCKET-HANDLER.JS - EL CEREBRO DE RED 4K
- * Optimizado para destrucción sincronizada y corrección de jitter.
+ * SOCKET-HANDLER.JS - EL CEREBRO DE RED (OPEN TUNE 2026)
+ * Optimizado para destrucción sincronizada, corrección de lag y movimiento continuo.
  */
 
 const socket = io();
 window.misJugadores = {}; 
 window.ultimoEstadoTurno = null;
-let puedeMoverse = false; 
-let armaSeleccionada = 'normal'; 
+window.puedeMoverse = false; 
+window.armaSeleccionada = 'normal'; 
+window.enFaseEscape = false;
 const teclasPresionadas = {};
 
 // --- GESTIÓN DE LOBBY ---
@@ -35,16 +36,15 @@ socket.on('actualizar_lobby', (jugadores) => {
     listaUl.innerHTML = html;
 });
 
-// --- GESTIÓN DE PARTIDA ---
+// --- GESTIÓN DE PARTIDA Y SINCRONIZACIÓN ---
 
 socket.on('comenzar_juego', (data) => {
     window.misJugadores = data.jugadores;
     window.ultimoEstadoTurno = data.turnoDe;
-    
-    // INICIALIZACIÓN DE FLAGS
-    window.puedeMoverse = true; // <--- FORZAMOS EL PERMISO AQUÍ
     window.animacionActiva = false;
+    window.enFaseEscape = false;
     
+    // Inicializar posiciones de renderizado para LERP
     for (let id in window.misJugadores) {
         window.misJugadores[id].renderX = window.misJugadores[id].x;
         window.misJugadores[id].renderY = window.misJugadores[id].y;
@@ -52,83 +52,52 @@ socket.on('comenzar_juego', (data) => {
 
     if (typeof cambiarAVistaJuego === "function") cambiarAVistaJuego();
     window.focus(); 
-    if (typeof actualizarInterfazTurno === "function") actualizarInterfazTurno();
+    actualizarInterfazTurno();
 });
 
-// NUEVO: Recepción de destrucción de mapa sincronizada
+// Sincronización de destrucción de mapa (Bitmask)
 socket.on('mapa_destruccion', (data) => {
-    // Llamamos a crearCrater con el flag 'emitir' en false para no entrar en bucle
     if (typeof crearCrater === 'function') {
-        crearCrater(data.x, data.y, data.radio, false);
+        // Ejecutamos la destrucción local sin re-emitir al servidor
+        crearCrater(data.x, data.y, data.radio);
     }
 });
 
-// NUEVO: Sincronización forzada para eliminar saltos (Jitter)
+// Corrección de Jitter (Posiciones autoritarias del servidor)
 socket.on('sincronizar_posiciones', (jugadoresServidor) => {
     for (let id in jugadoresServidor) {
         if (window.misJugadores[id]) {
             const jLocal = window.misJugadores[id];
             const jServer = jugadoresServidor[id];
             
-            // Forzamos la posición exacta del servidor para corregir errores de física local
-            jLocal.x = jServer.x;
-            jLocal.y = jServer.y;
+            // Si soy yo, solo corrijo si el error de predicción es muy alto (>30px)
+            const umbral = (id === socket.id) ? 30 : 5;
+            if (Math.hypot(jLocal.x - jServer.x, jLocal.y - jServer.y) > umbral) {
+                jLocal.x = jServer.x;
+                jLocal.y = jServer.y;
+            }
             jLocal.hp = jServer.hp;
         }
     }
 });
 
-socket.on('actualizar_estado', (data) => {
-    for (let id in data.jugadores) {
-        const serverData = data.jugadores[id];
-        if (!window.misJugadores[id]) {
-            window.misJugadores[id] = serverData;
-            continue;
-        }
-
-        const localJ = window.misJugadores[id];
-
-        if (id !== socket.id) { 
-            // ACTUALIZACIÓN PARA ENEMIGOS
-            localJ.x = serverData.x; // La X siempre la obedecemos
-            
-            // Solo obedecemos la Y del servidor si el tanque NO está cayendo en nuestra pantalla
-            // o si la diferencia es demasiado grande (teleport)
-            const diffY = Math.abs(localJ.y - serverData.y);
-            
-            if (diffY > 50) {
-                localJ.y = serverData.y;
-            } else {
-                // Si la diferencia es pequeña, preferimos nuestra física local de suelo
-                // para evitar que el servidor lo mantenga levitando.
-            }
-        } else {
-            // PARA MI TANQUE: Solo correcciones críticas
-            if (Math.hypot(localJ.x - serverData.x, localJ.y - serverData.y) > 60) {
-                localJ.x = serverData.x;
-                localJ.y = serverData.y;
-            }
-        }
-        localJ.hp = serverData.hp;
-        localJ.puntos = serverData.puntos || 0;
-    }
-});
-
 socket.on('nuevo_turno', (nuevoId) => {
     window.ultimoEstadoTurno = nuevoId;
-    puedeMoverse = (socket.id === nuevoId);
+    window.puedeMoverse = (socket.id === nuevoId);
     window.enFaseEscape = false; 
     actualizarInterfazTurno();
     
+    // Limpiar mensajes centrales después de un tiempo
     setTimeout(() => {
         const msj = document.getElementById('mensaje-central');
         if(msj && !window.enFaseEscape) msj.innerText = "";
     }, 2500);
 });
 
-// --- COMBATE Y EVENTOS ---
+// --- COMBATE ---
+
 socket.on('proyectil_disparado', (datos) => {
-    puedeMoverse = false; 
+    window.puedeMoverse = false; 
     if (typeof iniciarAnimacionProyectil === "function") {
         iniciarAnimacionProyectil(datos);
     }
@@ -141,7 +110,7 @@ socket.on('proyectil_disparado', (datos) => {
 
 socket.on('fase_escape', () => {
     if (socket.id === window.ultimoEstadoTurno) {
-        puedeMoverse = true; 
+        window.puedeMoverse = true; 
         window.enFaseEscape = true;
         
         const msj = document.getElementById('mensaje-central');
@@ -152,9 +121,9 @@ socket.on('fase_escape', () => {
     }
 });
 
-// Escuchar cuando un enemigo apunta
+// Ver a dónde apuntan los enemigos en tiempo real
 socket.on('enemigo_apuntando', (data) => {
-    if (window.misJugadores[data.id]) {
+    if (window.misJugadores[data.id] && data.id !== socket.id) {
         window.misJugadores[data.id].remoteAngulo = data.angulo;
         window.misJugadores[data.id].remotePotencia = data.potencia;
     }
@@ -176,8 +145,10 @@ socket.on('victoria', (data) => {
     setTimeout(() => window.location.reload(), 6000);
 });
 
+// --- FUNCIONES DE ACCIÓN ---
+
 function enviarDisparo(ang, pot) {
-    if (socket.id !== window.ultimoEstadoTurno || window.enFaseEscape) return;
+    if (socket.id !== window.ultimoEstadoTurno || window.enFaseEscape || window.animacionActiva) return;
     
     socket.emit('disparar', { 
         angulo: ang, 
@@ -197,12 +168,12 @@ function actualizarInterfazTurno() {
     }
 }
 
-// --- INPUTS ACTUALIZADOS ---
+// --- INPUTS Y MOVIMIENTO CONTINUO ---
 
 window.addEventListener('keydown', (e) => {
     teclasPresionadas[e.key.toLowerCase()] = true;
     
-    // El salto lo mantenemos como evento único para no saltar infinito
+    // Salto (Evento único para evitar spam)
     if ((e.key === 'w' || e.code === 'Space' || e.key === 'ArrowUp')) {
         const miTanque = window.misJugadores[socket.id];
         if (miTanque && !miTanque.enSalto && window.puedeMoverse && !window.animacionActiva) {
@@ -215,23 +186,19 @@ window.addEventListener('keyup', (e) => {
     teclasPresionadas[e.key.toLowerCase()] = false;
 });
 
-// Esta función procesará el movimiento continuo cada frame con COLISIÓN FÍSICA
-// Esta función procesará el movimiento continuo cada frame con COLISIÓN FÍSICA Y REVISIÓN DE TERRENO
-
 function procesarMovimientoContinuo() {
     if (!window.misJugadores || !window.misJugadores[socket.id]) return;
     
-    const esMiTurno = (typeof ultimoEstadoTurno !== 'undefined' && ultimoEstadoTurno === socket.id);
+    const esMiTurno = (window.ultimoEstadoTurno === socket.id);
     if (!esMiTurno || !window.puedeMoverse || window.animacionActiva) return;
 
     const miTanque = window.misJugadores[socket.id];
     if (miTanque.hp <= 0) return;
 
-    const SPEED = 1.5;
+    const SPEED = 1.8;
     let nuevaX = miTanque.x;
     let movido = false;
 
-    // 1. DETERMINAR DIRECCIÓN
     if (teclasPresionadas['a'] || teclasPresionadas['arrowleft']) {
         nuevaX -= SPEED;
         movido = true;
@@ -241,129 +208,44 @@ function procesarMovimientoContinuo() {
     }
 
     if (movido) {
-        // --- 2. VERIFICAR HITBOX Y "CAMINADO SOBRE TANQUES" ---
+        // Bloqueo de colisiones laterales
         let colisionBloqueada = false;
-        let sobreOtroAlMoverse = false;
-
         for (let id in window.misJugadores) {
             if (id === socket.id) continue;
-            
             let otro = window.misJugadores[id];
             if (otro.hp <= 0) continue;
 
             const diffX = Math.abs(nuevaX - otro.x);
             const diffY = Math.abs(miTanque.y - otro.y);
 
-            // A) DETECTAR SI ESTAMOS CAMINANDO SOBRE SU CABEZA
-            // Si estamos justo encima (Y=-20), permitimos el movimiento horizontal (X)
-            if (diffX < 26 && diffY >= 15 && diffY <= 25) {
-                sobreOtroAlMoverse = true;
-                // No bloqueamos colisión si estamos arriba, solo nos mantenemos a nivel
-                miTanque.y = otro.y - 20; 
-                continue; 
-            }
-
-            // B) BLOQUEO LATERAL (Solo si estamos a la misma altura aproximada)
-            if (diffX < 28 && diffY < 12) {
-                colisionBloqueada = true;
-                break;
-            }
-        }
-
-        // --- 3. APLICAR MOVIMIENTO ---
-        if (!colisionBloqueada) {
-            if (nuevaX < 0) nuevaX = 0;
-            if (nuevaX > MUNDO.w - 34) nuevaX = MUNDO.w - 34;
-            
-            miTanque.x = nuevaX;
-
-            // --- 4. AJUSTE DE PENDIENTES (Solo si no estamos sobre un tanque) ---
-            if (!sobreOtroAlMoverse) {
-                let piesX = Math.floor(miTanque.x + 17);
-                if (typeof verificarSuelo === 'function') {
-                    let intentos = 0;
-                    while (verificarSuelo(piesX, miTanque.y - 1) && intentos < 4) {
-                        miTanque.y--;
-                        intentos++;
-                    }
-                }
-            }
-
-            // 5. NOTIFICAR AL SERVIDOR
-            socket.emit('mover', { x: miTanque.x, y: miTanque.y });
-        }
-    }
-}
-
-/*function procesarMovimientoContinuo() {
-    if (!window.misJugadores || !window.misJugadores[socket.id]) return;
-    
-    const esMiTurno = (typeof ultimoEstadoTurno !== 'undefined' && ultimoEstadoTurno === socket.id);
-    if (!esMiTurno || !window.puedeMoverse || window.animacionActiva) return;
-
-    const miTanque = window.misJugadores[socket.id];
-    if (miTanque.hp <= 0) return;
-
-    const SPEED = 1.5;
-    let nuevaX = miTanque.x; // Usamos una variable temporal para probar el movimiento
-    let movido = false;
-
-    // 1. DETERMINAR DIRECCIÓN
-    if (teclasPresionadas['a'] || teclasPresionadas['arrowleft']) {
-        nuevaX -= SPEED;
-        movido = true;
-    } else if (teclasPresionadas['d'] || teclasPresionadas['arrowright']) {
-        nuevaX += SPEED;
-        movido = true;
-    }
-
-    if (movido) {
-        // --- 2. VERIFICAR HITBOX CONTRA OTROS JUGADORES ---
-        let colisionBloqueada = false;
-        for (let id in window.misJugadores) {
-            if (id === socket.id) continue; // No chocar con uno mismo
-            
-            let otro = window.misJugadores[id];
-            if (otro.hp <= 0) continue; // Los muertos no bloquean
-
-            // Distancia horizontal (ancho del tanque aprox 32-34px)
-            const diffX = Math.abs(nuevaX - otro.x);
-            // Distancia vertical (para saber si estamos al mismo nivel o uno encima de otro)
-            const diffY = Math.abs(miTanque.y - otro.y);
-
-            // Si estamos cerca en X y casi a la misma altura en Y, hay choque lateral
+            // Si estamos al mismo nivel y chocamos de lado
             if (diffX < 30 && diffY < 15) {
                 colisionBloqueada = true;
                 break;
             }
         }
 
-        // --- 3. APLICAR MOVIMIENTO SI ESTÁ LIBRE ---
         if (!colisionBloqueada) {
-            // Límites del mapa (basado en tu original)
-            if (nuevaX < 0) nuevaX = 0;
-            if (nuevaX > MUNDO.w - 34) nuevaX = MUNDO.w - 34;
-            
+            // Límites del mapa
+            nuevaX = Math.max(0, Math.min(MUNDO.w - 34, nuevaX));
             miTanque.x = nuevaX;
 
-            // --- 4. AJUSTE DE PENDIENTES (TREPAR) ---
-            // Si al movernos la X, nuestros pies ahora están dentro del suelo, subimos la Y
+            // Ajuste suave de pendientes al caminar
             let piesX = Math.floor(miTanque.x + 17);
             if (typeof verificarSuelo === 'function') {
-                // Sube hasta 4px de pendiente por frame para no quedar trabado
-                let intentos = 0;
-                while (verificarSuelo(piesX, miTanque.y - 1) && intentos < 4) {
+                let iter = 0;
+                while (verificarSuelo(piesX, miTanque.y - 1) && iter < 5) {
                     miTanque.y--;
-                    intentos++;
+                    iter++;
                 }
             }
 
-            // 5. NOTIFICAR AL SERVIDOR
             socket.emit('mover', { x: miTanque.x, y: miTanque.y });
         }
     }
-}*/
+}
 
+// Inicialización de botones
 document.addEventListener('DOMContentLoaded', () => {
     const btnListo = document.getElementById('btn-listo');
     if (btnListo) {
