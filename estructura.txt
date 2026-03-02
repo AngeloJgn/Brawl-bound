@@ -1,0 +1,16 @@
+mi-juego/
+├── node_modules/         # Librerías (Express, Socket.io)
+├── public/               # Todo lo que el navegador puede ver
+│   ├── css/              # Estilos (Menú, Inventario, HUD)
+│   │   └── style.css
+│   ├── js/               # Lógica del cliente dividida
+│   │   ├── menu.js       # Manejo de clics en inventario y lobby
+│   │   ├── game.js       # Motor de renderizado (lo que ya hicimos)
+│   │   └── socket-client.js # Comunicación pura con el servidor
+│   ├── assets/           # Imágenes de armas, skins y sonidos
+│   └── index.html        # Estructura base (vistas)
+├── src/                  # El "Cerebro" organizado
+│   ├── database.js       # Conexión a MongoDB
+│   └── game-logic.js     # Reglas del juego (turnos, daño)
+├── server.js             # Punto de entrada principal
+└── package.json          # Lista de dependencias

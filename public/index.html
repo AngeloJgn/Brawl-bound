@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Brawl-Bound: Wild Edition | 2026</title>
+    
+    <link rel="stylesheet" href="css/style.css">
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Rajdhani:wght@300;500;700&display=swap" rel="stylesheet">
+    
+    <style>
+        /* Estilos críticos para evitar parpadeos */
+        body { background-color: #05070a; margin: 0; overflow: hidden; }
+        #vista-juego, #vista-lobby { display: none; }
+        
+        .btn-fullscreen {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            width: 45px;
+            height: 45px;
+            background: rgba(0, 229, 255, 0.1);
+            border: 1px solid rgba(0, 229, 255, 0.3);
+            color: #00e5ff;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            cursor: pointer;
+            z-index: 2000;
+            backdrop-filter: blur(5px);
+            transition: 0.3s;
+        }
+        .btn-fullscreen:hover {
+            background: #00e5ff;
+            color: #000;
+            box-shadow: 0 0 15px #00e5ff;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="vista-wrapper">
+        
+        <div id="vista-menu" style="display: block;">
+            <h1>Brawl Bound</h1>
+            
+            <div class="contenedor-principal" style="max-width: 900px; margin: auto; display: flex; flex-wrap: wrap; justify-content: center; gap: 20px;">
+                <div id="preview-personaje" style="flex: 1; min-width: 280px; height: 300px; background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.05); position: relative;">
+                    <canvas id="canvas-preview" style="width: 100%; height: 100%;"></canvas>
+                </div>
+                
+                <div id="inventario" style="flex: 1; min-width: 280px; text-align: left; background: rgba(13, 17, 23, 0.9); padding: 25px; border: 1px solid rgba(255,255,255,0.1);">
+                    <h3 style="margin: 0; font-size: 0.7rem; color: #00e5ff; letter-spacing: 3px;">SYSTEM.INIT_PILOT</h3>
+                    
+                    <div style="margin: 20px 0;">
+                        <label style="color: #666; text-transform: uppercase; font-size: 0.6rem; display: block; margin-bottom: 5px;">Codename</label>
+                        <input type="text" id="nombre" placeholder="OPERATOR_ID" maxlength="12">
+                    </div>
+                    
+                    <div>
+                        <label style="color: #666; text-transform: uppercase; font-size: 0.6rem; display: block; margin-bottom: 5px;">Armor Coating</label>
+                        <div style="display: flex; align-items: center; gap: 15px;">
+                            <input type="color" id="color-pref" value="#00e5ff">
+                            <span style="font-family: 'Rajdhani'; font-size: 0.8rem; color: #aaa;">CHEST_PLATE_HEX</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div style="margin-top: 30px;">
+                <button id="btn-buscar" class="btn-principal">SYNC WITH SERVER</button>
+                <p style="font-family: 'Orbitron'; font-size: 0.5rem; color: #333; margin-top: 15px; letter-spacing: 2px;">V.2.0.6-ALPHA // 4K_NATIVE_READY</p>
+            </div>
+        </div>
+
+        <div id="vista-lobby">
+            <h1 style="color: #00e5ff;">Waiting for Squad</h1>
+            <div id="ul-jugadores" style="margin: 30px auto; max-width: 400px;"></div>
+            <button id="btn-listo" class="btn-principal">COMMENCE DEPLOYMENT</button>
+        </div>
+
+        <div id="vista-juego" style="width: 100%; height: 100%;">
+            <div class="vista-wrapper">
+
+                <div id="controles-moviles" style="display: none;">
+    <div id="joystick-movimiento">
+        <div id="stick-mov"></div>
+    </div>
+    <div id="trackpad-apuntado">
+        <div id="guia-apuntado">AIM</div>
+    </div>
+</div>
+                
+                <aside class="panel-lateral" id="panel-stats-izq"></aside>
+
+                <main class="ventana-central">
+                    <header id="hud-superior-pilotos">
+                        <div id="hud-jugadores-top"></div>
+                    </header>
+                    
+                    <div id="contenedor-canvas">
+                        <div id="hud-centro-aviso">
+                            <div id="mensaje-central">ACQUIRING SIGNAL...</div>
+                            <div class="timer-box"><span id="turno-timer">20</span></div>
+                        </div>
+                        <canvas id="mundo"></canvas>
+                    </div>
+
+                    <footer>
+                        <div id="btn-arma-1" class="slot-mini active">
+                            <div style="width: 15px; height: 15px; background: #00e5ff; transform: rotate(45deg);"></div>
+                            <span style="font-size: 10px;">KINETIC_CORE</span>
+                        </div>
+                        <div id="btn-arma-2" class="slot-mini">
+                            <div style="width: 15px; height: 15px; background: #ffeb3b; border-radius: 2px;"></div>
+                            <span style="font-size: 10px;">PLASMA_BURST</span>
+                        </div>
+                        <div style="margin-left: 20px; border-left: 1px solid #333; padding-left: 20px;">
+                            <span style="font-size: 9px; color: #666; display: block;">ACTIVE_PILOT</span>
+                            <span id="nombre-turno" style="color: #fff; font-size: 12px; font-weight: bold;">---</span>
+                        </div>
+                    </footer>
+                </main>
+            </div>
+        </div>
+    </div>
+
+    <button class="btn-fullscreen" id="fs-button" onclick="toggleFullScreen()">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"></path>
+        </svg>
+    </button>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+        // Inicialización de seguridad para variables globales
+        window.misJugadores = {};
+        window.ultimoEstadoTurno = null;
+        window.animacionActiva = false;
+    </script>
+    
+    <script src="js/socket-handler.js"></script>
+    <script src="js/menu.js"></script>
+    <script src="js/renderer.js"></script>
+    <script src="js/physics.js"></script>
+    <script src="js/ui.js"></script>
+
+    <script>
+        function toggleFullScreen() {
+            if (!document.fullscreenElement) {
+                document.documentElement.requestFullscreen().catch(err => {
+                    console.error(`Error: ${err.message}`);
+                });
+            } else {
+                if (document.exitFullscreen) {
+                    document.exitFullscreen();
+                }
+            }
+        }
+    </script>
+</body>
+</html>
